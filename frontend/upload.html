@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Upload Files - DocuQuery</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@3.3.2/dist/tailwind.min.css" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/@lottiefiles/lottie-player@latest/dist/lottie-player.js"></script>
+</head>
+<body class="bg-gradient-to-br from-indigo-100 via-white to-purple-100 text-gray-800">
+
+  <!-- Navbar -->
+  <nav class="w-full py-4 px-8 flex justify-between items-center bg-white shadow fixed top-0 z-50">
+    <h1 class="text-2xl font-bold text-indigo-700">DocuQuery</h1>
+    <div class="space-x-6">
+      <a href="index.html" class="text-indigo-600 hover:text-indigo-800 font-medium">Home</a>
+      <a href="upload.html" class="text-indigo-800 font-bold underline">Upload</a>
+      <a href="chat.html" class="text-indigo-600 hover:text-indigo-800 font-medium">Chat</a>
+    </div>
+  </nav>
+
+  <!-- Upload Section -->
+  <section class="pt-24 px-8 max-w-4xl mx-auto">
+    <div class="text-center mb-12">
+      <h2 class="text-4xl font-bold text-indigo-800 mb-4">Upload Your Documents</h2>
+      <p class="text-lg text-gray-600">Drag and drop your PDFs, TXT, or DOCX files here to get started.</p>
+    </div>
+
+    <!-- Drop Zone -->
+    <div id="dropzone" class="flex items-center justify-center p-12 border-4 border-dashed border-indigo-400 rounded-xl bg-white hover:bg-indigo-50 transition-all cursor-pointer"
+      ondrop="handleDrop(event)"
+      ondragover="event.preventDefault()">
+      <p class="text-gray-600 text-lg">Drop files here or click to browse</p>
+      <input type="file" id="fileInput" class="hidden" multiple />
+    </div>
+
+    <!-- File Preview -->
+    <div id="preview" class="mt-10 grid gap-4"></div>
+
+    <!-- Progress Bar -->
+    <div id="progress-container" class="mt-6 hidden">
+      <div class="w-full bg-gray-200 rounded-full h-4">
+        <div id="progress-bar" class="bg-indigo-600 h-4 rounded-full w-0 transition-all"></div>
+      </div>
+    </div>
+
+    <!-- Success Animation -->
+    <div id="success-animation" class="hidden mt-10 text-center">
+      <lottie-player
+        src="https://assets9.lottiefiles.com/packages/lf20_pprxh53t.json"
+        background="transparent"
+        speed="1"
+        style="width: 150px; height: 150px; margin: 0 auto"
+        autoplay>
+      </lottie-player>
+      <p class="text-green-600 font-semibold mt-4">Upload Successful!</p>
+    </div>
+
+    <!-- Uploaded Files List -->
+    <div id="uploaded-files" class="mt-10 hidden">
+      <h3 class="text-xl font-semibold text-indigo-700 mb-2">Uploaded Files:</h3>
+      <ul id="file-list" class="list-disc pl-6 text-gray-700"></ul>
+    </div>
+
+    <!-- Upload Button -->
+    <div class="mt-10 text-center">
+      <button id="uploadButton"
+        class="px-8 py-3 text-lg font-medium bg-indigo-600 text-white rounded-full shadow hover:bg-indigo-700 transition">
+        Upload & Index Files
+      </button>
+    </div>
+  </section>
+
+  <!-- Scripts -->
+  <script>
+    const API_BASE_URL = "http://localhost:8000"; // Update if hosted elsewhere
+
+    function createToast(message, type = 'info') {
+      const colors = {
+        info: 'bg-blue-500',
+        success: 'bg-green-500',
+        error: 'bg-red-500'
+      };
+      const toast = document.createElement('div');
+      toast.className = `${colors[type]} fixed bottom-6 right-6 text-white px-4 py-2 rounded shadow z-50 animate-bounce`;
+      toast.innerText = message;
+      document.body.appendChild(toast);
+      setTimeout(() => toast.remove(), 3000);
+    }
+
+    const fileInput = document.getElementById("fileInput");
+    const dropzone = document.getElementById("dropzone");
+    const preview = document.getElementById("preview");
+    const progressContainer = document.getElementById("progress-container");
+    const progressBar = document.getElementById("progress-bar");
+    const successAnimation = document.getElementById("success-animation");
+    const uploadedFiles = document.getElementById("uploaded-files");
+    const fileList = document.getElementById("file-list");
+    const uploadButton = document.getElementById("uploadButton");
+
+    let filesToUpload = [];
+
+    dropzone.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", (e) => handleFiles(e.target.files));
+    uploadButton.addEventListener("click", uploadFiles);
+    window.handleDrop = function(e) {
+      e.preventDefault();
+      handleFiles(e.dataTransfer.files);
+    };
+
+    function handleFiles(files) {
+      const validTypes = ["application/pdf", "text/plain", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"];
+      for (const file of files) {
+        if (!validTypes.includes(file.type)) {
+          createToast(`${file.name} is not supported`, 'error');
+          continue;
+        }
+        if (file.size > 10 * 1024 * 1024) {
+          createToast(`${file.name} exceeds 10MB`, 'error');
+          continue;
+        }
+        if (!filesToUpload.find((f) => f.name === file.name)) {
+          filesToUpload.push(file);
+          const div = document.createElement("div");
+          div.className = "flex items-center justify-between bg-white px-4 py-2 rounded-lg shadow group";
+          div.innerHTML = `
+            <div class="flex items-center gap-3">
+              <svg class="w-5 h-5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+              </svg>
+              <span class="text-indigo-600 font-medium">${file.name}</span>
+            </div>
+            <button class="opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:text-red-700">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+              </svg>
+            </button>
+          `;
+          div.id = `file-${file.name.replace(/\W/g, "")}`;
+          div.querySelector('button').addEventListener('click', () => removeFile(file.name));
+          preview.appendChild(div);
+        }
+      }
+    }
+
+    function removeFile(fileName) {
+      filesToUpload = filesToUpload.filter((f) => f.name !== fileName);
+      const elem = document.getElementById(`file-${fileName.replace(/\W/g, "")}`);
+      if (elem) elem.remove();
+    }
+
+    async function uploadFiles() {
+      if (filesToUpload.length === 0) {
+        createToast("Select at least one file", 'error');
+        return;
+      }
+
+      uploadButton.disabled = true;
+      uploadButton.classList.add('opacity-50', 'cursor-not-allowed');
+      progressContainer.classList.remove("hidden");
+      progressBar.style.width = "0%";
+      successAnimation.classList.add("hidden");
+      uploadedFiles.classList.add("hidden");
+
+      let uploaded = 0;
+
+      for (const file of filesToUpload) {
+        const formData = new FormData();
+        formData.append("file", file);
+
+        try {
+          const res = await fetch(`${API_BASE_URL}/upload/`, {
+            method: "POST",
+            body: formData,
+          });
+
+          if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || "Upload failed");
+          }
+
+          uploaded++;
+          progressBar.style.width = `${(uploaded / filesToUpload.length) * 100}%`;
+        } catch (err) {
+          createToast(`Error uploading ${file.name}`, 'error');
+        }
+      }
+
+      if (uploaded === filesToUpload.length) {
+        filesToUpload = [];
+        preview.innerHTML = "";
+        progressBar.style.width = "100%";
+        successAnimation.classList.remove("hidden");
+        await loadFiles();
+        createToast("All files uploaded!", 'success');
+      }
+
+      uploadButton.disabled = false;
+      uploadButton.classList.remove('opacity-50', 'cursor-not-allowed');
+    }
+
+    async function loadFiles() {
+      try {
+        const res = await fetch(`${API_BASE_URL}/files`);
+        const data = await res.json();
+        fileList.innerHTML = "";
+        if (data.files && data.files.length > 0) {
+          uploadedFiles.classList.remove("hidden");
+          data.files.forEach(file => {
+            const li = document.createElement("li");
+            li.innerHTML = `<span class="flex items-center gap-2"><svg class="w-5 h-5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>${file}</span>`;
+            fileList.appendChild(li);
+          });
+        }
+      } catch (err) {
+        createToast("Error fetching file list", 'error');
+      }
+    }
+
+    window.addEventListener("DOMContentLoaded", loadFiles);
+  </script>
+</body>
+</html>

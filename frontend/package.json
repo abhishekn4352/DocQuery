@@ -1,0 +1,12 @@
+{
+  "name": "docuquery-frontend",
+  "version": "1.0.0",
+  "description": "Frontend for DocuQuery application",
+  "scripts": {
+    "build": "tailwindcss -i ./src/input.css -o ./style.css",
+    "watch": "tailwindcss -i ./src/input.css -o ./style.css --watch"
+  },
+  "dependencies": {
+    "tailwindcss": "^3.4.1"
+  }
+} 
