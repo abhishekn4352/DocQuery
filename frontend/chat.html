@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>DocQuery — Ask your documents</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&amp;family=Inter:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap" rel="stylesheet" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    darkMode: "class",
+    theme: {
+      extend: {
+        colors: {
+          paper: "var(--paper)",
+          "paper-raised": "var(--paper-raised)",
+          ink: "var(--ink)",
+          accent: "var(--accent)",
+          "accent-strong": "var(--accent-strong)",
+          highlight: "var(--highlight)",
+          verified: "var(--verified)",
+          danger: "var(--danger)",
+          line: "var(--line)",
+        },
+      },
+    },
+  };
+</script>
+<link rel="stylesheet" href="src/styles.css" />
+</head>
+<body class="h-screen flex flex-col bg-paper text-ink overflow-hidden">
+
+<header class="border-b border-line shrink-0">
+  <div class="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between gap-4">
+    <a href="index.html" class="font-serif-display text-xl font-semibold shrink-0">DocQuery</a>
+
+    <select id="scope-select" class="text-sm border border-line rounded-md px-2.5 py-1.5 bg-paper-raised max-w-[220px]">
+      <option value="">All documents</option>
+    </select>
+
+    <div class="flex items-center gap-2 ml-auto">
+      <button id="history-toggle" class="text-sm text-ink/60 dark:text-paper/60 hover:text-ink dark:hover:text-paper px-2 py-1.5">History</button>
+      <button id="new-chat" class="text-sm font-medium px-3 py-1.5 rounded-md border border-line hover:border-accent">New chat</button>
+      <button id="export-chat" class="text-sm text-ink/60 dark:text-paper/60 hover:text-ink dark:hover:text-paper px-2 py-1.5">Export</button>
+      <button data-theme-toggle aria-pressed="false" class="text-sm text-ink/60 dark:text-paper/60 hover:text-ink dark:hover:text-paper px-2 py-1.5">Dark mode</button>
+    </div>
+  </div>
+
+  <div id="history-panel" class="hidden border-t border-line bg-paper-raised">
+    <div class="max-w-7xl mx-auto px-6 py-3">
+      <div id="conversation-list" class="flex flex-wrap gap-2"></div>
+    </div>
+  </div>
+</header>
+
+<main class="flex-1 flex overflow-hidden">
+  <!-- Conversation -->
+  <section class="flex-1 flex flex-col min-w-0 lg:border-r border-line">
+    <div id="messages" class="flex-1 overflow-y-auto px-6 py-6 space-y-4 max-w-3xl mx-auto w-full"></div>
+
+    <div class="border-t border-line px-6 py-4">
+      <form id="ask-form" class="max-w-3xl mx-auto flex gap-2 items-end">
+        <textarea id="question-input" rows="1" placeholder="Ask something about your documents…" required
+          class="flex-1 resize-none border border-line rounded-md px-3 py-2 bg-paper-raised max-h-32 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"></textarea>
+        <button type="submit" id="ask-button" class="bg-accent text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-accent-strong transition shrink-0">Ask</button>
+      </form>
+      <p id="ask-error" class="max-w-3xl mx-auto text-xs text-danger mt-2 hidden"></p>
+    </div>
+  </section>
+
+  <!-- Evidence panel -->
+  <aside id="evidence-panel" class="hidden lg:flex lg:w-96 flex-col border-l border-line bg-paper-raised overflow-y-auto shrink-0">
+    <div class="px-5 py-4 border-b border-line">
+      <h2 class="font-serif-display font-semibold">Evidence</h2>
+      <p class="text-xs text-ink/50 dark:text-paper/50 mt-0.5">What the last answer was grounded in.</p>
+    </div>
+    <div id="evidence-list" class="p-5 space-y-4"></div>
+  </aside>
+
+  <button id="evidence-toggle-mobile" class="lg:hidden fixed bottom-20 right-4 bg-ink text-paper dark:bg-paper dark:text-ink rounded-full px-4 py-2 text-xs font-medium shadow-lg">
+    Evidence
+  </button>
+</main>
+
+<script type="module">
+import { initTheme, wireThemeToggle } from "./src/theme.js";
+import * as api from "./src/api.js";
+import { escapeHtml, formatTimestamp, emptyStateHtml, createToast } from "./src/components.js";
+
+initTheme();
+wireThemeToggle();
+
+const messagesEl = document.getElementById("messages");
+const evidenceList = document.getElementById("evidence-list");
+const evidencePanel = document.getElementById("evidence-panel");
+const scopeSelect = document.getElementById("scope-select");
+const askForm = document.getElementById("ask-form");
+const questionInput = document.getElementById("question-input");
+const askButton = document.getElementById("ask-button");
+const askError = document.getElementById("ask-error");
+const historyPanel = document.getElementById("history-panel");
+const conversationList = document.getElementById("conversation-list");
+
+const ACTIVE_KEY = "docquery-active-conversation";
+let activeConversationId = null;
+let allDocuments = [];
+
+// --- Setup: document scope options, restore/create conversation ----------
+
+async function initDocumentScope() {
+  allDocuments = await api.listDocuments().catch(() => []);
+  const readyDocs = allDocuments.filter((d) => d.processing_status === "ready");
+  for (const doc of readyDocs) {
+    const opt = document.createElement("option");
+    opt.value = doc.document_id;
+    opt.textContent = doc.original_filename;
+    scopeSelect.appendChild(opt);
+  }
+  const params = new URLSearchParams(window.location.search);
+  const preselect = params.get("document");
+  if (preselect && readyDocs.some((d) => d.document_id === preselect)) {
+    scopeSelect.value = preselect;
+  }
+}
+
+async function initConversation() {
+  const saved = localStorage.getItem(ACTIVE_KEY);
+  if (saved) {
+    try {
+      await loadConversation(saved);
+      return;
+    } catch {
+      localStorage.removeItem(ACTIVE_KEY);
+    }
+  }
+  await startNewConversation();
+}
+
+async function startNewConversation() {
+  const conv = await api.createConversation();
+  activeConversationId = conv.conversation_id;
+  localStorage.setItem(ACTIVE_KEY, activeConversationId);
+  messagesEl.innerHTML = emptyStateHtml("Ask your first question", "Answers are grounded only in what you've uploaded.");
+  evidenceList.innerHTML = emptyStateHtml("No evidence yet", "Sources will appear here once you ask something.");
+  await refreshConversationList();
+}
+
+async function loadConversation(conversationId) {
+  const data = await api.getConversation(conversationId);
+  activeConversationId = conversationId;
+  localStorage.setItem(ACTIVE_KEY, conversationId);
+  messagesEl.innerHTML = "";
+  if (data.messages.length === 0) {
+    messagesEl.innerHTML = emptyStateHtml("Ask your first question", "Answers are grounded only in what you've uploaded.");
+  }
+  let lastSources = [];
+  for (const message of data.messages) {
+    appendMessage(message.role, message.content, message.created_at);
+    if (message.sources && message.sources.length) lastSources = message.sources;
+  }
+  renderEvidence(lastSources);
+  await refreshConversationList();
+}
+
+async function refreshConversationList() {
+  const conversations = await api.listConversations().catch(() => []);
+  conversationList.innerHTML = "";
+  for (const conv of conversations) {
+    const chip = document.createElement("div");
+    chip.className =
+      "flex items-center gap-1.5 text-xs border rounded-full pl-3 pr-1.5 py-1 " +
+      (conv.conversation_id === activeConversationId
+        ? "border-accent text-accent"
+        : "border-line text-ink/70 dark:text-paper/70");
+    chip.innerHTML = `
+      <button data-open="${conv.conversation_id}" class="max-w-[160px] truncate">${escapeHtml(conv.title || "New chat")}</button>
+      <button data-remove="${conv.conversation_id}" class="text-ink/30 hover:text-danger px-1">&times;</button>
+    `;
+    conversationList.appendChild(chip);
+  }
+}
+
+conversationList.addEventListener("click", async (e) => {
+  const openId = e.target.closest("[data-open]")?.dataset.open;
+  const removeId = e.target.closest("[data-remove]")?.dataset.remove;
+  if (openId) await loadConversation(openId);
+  if (removeId) {
+    await api.deleteConversation(removeId);
+    if (removeId === activeConversationId) await startNewConversation();
+    else await refreshConversationList();
+  }
+});
+
+document.getElementById("history-toggle").addEventListener("click", () => {
+  historyPanel.classList.toggle("hidden");
+});
+document.getElementById("new-chat").addEventListener("click", startNewConversation);
+
+// --- Messages & evidence rendering ---------------------------------------
+
+function appendMessage(role, content, timestamp, { streaming = false } = {}) {
+  if (messagesEl.querySelector("[data-empty-state]") || messagesEl.children.length === 0) {
+    messagesEl.innerHTML = "";
+  }
+  const wrapper = document.createElement("div");
+  wrapper.className = `animate-settle-in flex ${role === "user" ? "justify-end" : "justify-start"}`;
+  const bubble = document.createElement("div");
+  bubble.className =
+    "max-w-[85%] rounded-lg px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap " +
+    (role === "user" ? "bg-accent text-white" : "bg-paper-raised border border-line");
+  bubble.textContent = content;
+  wrapper.appendChild(bubble);
+  if (timestamp) {
+    const ts = document.createElement("span");
+    ts.className = "hidden"; // timestamps shown on hover via title attribute instead, keeps bubbles clean
+    wrapper.title = formatTimestamp(timestamp);
+  }
+  messagesEl.appendChild(wrapper);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  return bubble;
+}
+
+function renderEvidence(sources) {
+  if (!sources || sources.length === 0) {
+    evidenceList.innerHTML = emptyStateHtml("No evidence yet", "Sources will appear here once you ask something.");
+    return;
+  }
+  evidenceList.innerHTML = "";
+  sources.forEach((source, index) => {
+    const card = document.createElement("div");
+    card.className = "animate-slide-in border border-line rounded-md p-3";
+    const location = source.page ? `Page ${escapeHtml(source.page)}` : (source.section ? escapeHtml(source.section) : "");
+    card.innerHTML = `
+      <p class="text-xs font-mono-data text-ink/40 dark:text-paper/40 mb-1">[${index + 1}]</p>
+      <p class="text-sm font-medium truncate">${escapeHtml(source.filename)}</p>
+      ${location ? `<p class="text-xs text-accent mb-1.5">${location}</p>` : ""}
+      <p class="text-xs text-ink/60 dark:text-paper/60 leading-relaxed border-l-2 border-highlight pl-2">${escapeHtml(source.excerpt)}</p>
+    `;
+    evidenceList.appendChild(card);
+  });
+}
+
+// --- Asking questions (streams with graceful fallback baked into api.js) --
+
+askForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const question = questionInput.value.trim();
+  if (!question) return;
+  askError.classList.add("hidden");
+  questionInput.value = "";
+  questionInput.style.height = "auto";
+  askButton.disabled = true;
+  askButton.textContent = "Thinking…";
+
+  appendMessage("user", question, new Date().toISOString());
+  const assistantBubble = appendMessage("assistant", "", new Date().toISOString());
+  assistantBubble.innerHTML = '<span class="inline-flex gap-1"><span class="w-1.5 h-1.5 rounded-full bg-current animate-pulse"></span><span class="w-1.5 h-1.5 rounded-full bg-current animate-pulse [animation-delay:150ms]"></span><span class="w-1.5 h-1.5 rounded-full bg-current animate-pulse [animation-delay:300ms]"></span></span>';
+
+  const documentId = scopeSelect.value || undefined;
+  let streamedText = "";
+  let gotFirstToken = false;
+
+  try {
+    await api.askQuestionStream(activeConversationId, question, documentId, (event) => {
+      if (event.type === "sources") {
+        renderEvidence(event.sources);
+      } else if (event.type === "token") {
+        if (!gotFirstToken) { assistantBubble.textContent = ""; gotFirstToken = true; }
+        streamedText += event.text;
+        assistantBubble.textContent = streamedText;
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      } else if (event.type === "done") {
+        assistantBubble.textContent = event.answer;
+        renderEvidence(event.sources);
+      } else if (event.type === "error") {
+        assistantBubble.remove();
+        askError.textContent = event.message || "Something went wrong answering that.";
+        askError.classList.remove("hidden");
+      }
+    });
+    await refreshConversationList();
+  } catch (err) {
+    assistantBubble.remove();
+    askError.textContent = err.message || "Something went wrong answering that.";
+    askError.classList.remove("hidden");
+    createToast("Couldn't get an answer just now.", "error");
+  } finally {
+    askButton.disabled = false;
+    askButton.textContent = "Ask";
+  }
+});
+
+questionInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    askForm.requestSubmit();
+  }
+});
+questionInput.addEventListener("input", () => {
+  questionInput.style.height = "auto";
+  questionInput.style.height = `${questionInput.scrollHeight}px`;
+});
+
+// --- Export & mobile evidence toggle --------------------------------------
+
+document.getElementById("export-chat").addEventListener("click", async () => {
+  const data = await api.getConversation(activeConversationId);
+  const lines = data.messages.map((m) => `${m.role === "user" ? "You" : "DocQuery"}: ${m.content}`);
+  const blob = new Blob([lines.join("\n\n")], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "docquery-conversation.txt";
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+document.getElementById("evidence-toggle-mobile").addEventListener("click", () => {
+  evidencePanel.classList.toggle("hidden");
+  evidencePanel.classList.toggle("flex");
+  evidencePanel.classList.toggle("fixed");
+  evidencePanel.classList.toggle("inset-0");
+  evidencePanel.classList.toggle("z-30");
+});
+
+// --- Boot ------------------------------------------------------------------
+
+(async () => {
+  await initDocumentScope();
+  await initConversation();
+})();
+</script>
+</body>
+</html>
